@@ -34,7 +34,7 @@ impl CountdownActor {
 
         if let Some(hb) = self.interval_rx.recv().await {
 
-            fix_println!("Received heartbeat interval from Sender: {} ms", hb);
+            fix_println!("Received interval from sender: {} ms", hb);
 
             // Use a tokio select loop to handle countdown resets and heartbeat ticks
             let mut interval = time::interval(time::Duration::from_millis(hb));
@@ -83,7 +83,7 @@ impl CountdownActor {
                 fix_println!("Waiting for {} milliseconds.", self.heartbeat_internal_ms);
                 interval.tick().await;
                 let _ = self.alarm_tx.send(AlarmMessage::Alarm).await;
-                fix_println!("HB request sent at {}", chrono::offset::Utc::now().format("%H:%M:%S.%3f").to_string().as_str());
+                fix_println!("HB request sent");
 
             }
         }

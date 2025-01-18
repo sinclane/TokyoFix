@@ -30,7 +30,7 @@ impl SocketActor {
     pub async fn start(&mut self) {
 
         let mut sent = false;
-        fix_println!("Starting SocketActor::start");
+        fix_println!("Starting SocketActor");
 
         let mut buf = BytesMut::with_capacity(1024 * 128);
 

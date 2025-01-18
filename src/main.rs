@@ -31,7 +31,7 @@ async fn main() -> io::Result<()>{
     let (interval_tx, interval_rx) = mpsc::channel::<u64>(8);
     let (alarm_tx, alarm_rx) = mpsc::channel::<AlarmMessage>(8);
     let (reset_tx, reset_rx) = mpsc::channel::<ResetMessage>(8);
-    let (mut _socket, _) = listener.accept().await?;
+    let (_socket, _) = listener.accept().await?;
 
     let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
     let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx, reset_tx);
