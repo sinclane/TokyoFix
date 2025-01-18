@@ -1,5 +1,6 @@
 mod countdown_actor;
 mod socket_actor;
+mod fix_decoder;
 
 use crate::countdown_actor::{AlarmMessage, ResetMessage};
 use config::{Config, File};
@@ -7,9 +8,12 @@ use glob::glob;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{self, Write};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
+use tokio_util::codec::Decoder;
+use crate::fix_decoder::MyFIXDecoder;
 
 /// Custom `print!` macro that adds a timestamp to log messages
 #[macro_export]
@@ -50,14 +54,17 @@ async fn main() -> io::Result<()> {
     let (reset_tx, reset_rx) = mpsc::channel::<ResetMessage>(8);
     let (_socket, _) = listener.accept().await?;
 
-    let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
-    let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx, reset_tx);
+    let decoder_impl = Arc::new(Mutex::new(MyFIXDecoder::new(&settings)));
+    let decoder_clone = Arc::clone(&decoder_impl);
 
     let sa_task = tokio::spawn(async move {
+
+        let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx, reset_tx, decoder_clone);
         fix_println!("Starting SocketActor.");
         sa.start().await;
     });
     let hb_task = tokio::spawn(async move {
+        let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
         fix_println!("Starting CountdownActor.");
         hb.start().await;
     });

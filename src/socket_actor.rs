@@ -4,26 +4,42 @@ use std::time::SystemTime;
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc};
+use tokio::sync::{mpsc, Mutex};
 use std::io::{self,Write};
+use std::sync::Arc;
+use tokio_util::codec::{Decoder, LinesCodec};
 use crate::countdown_actor::AlarmMessage;
 use crate::countdown_actor::ResetMessage;
+use crate::fix_decoder::MyFIXDecoder;
 use crate::fix_println;
+
 
 pub struct SocketActor {
     socket: TcpStream,
     alarm_rx: mpsc::Receiver<AlarmMessage>,
     interval_tx: mpsc::Sender<u64>,
-    reset_tx: mpsc::Sender<ResetMessage>
+    reset_tx: mpsc::Sender<ResetMessage>,
+
+    decoder: Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>
 }
 
+type RxCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
+type TxCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
+// Try to avoid Socket Actor knowing anything about the message structure/protocol.
+// Hence decoder is passed in as a dyn
 impl SocketActor {
-    pub fn new(socket: TcpStream, channel: mpsc::Receiver<AlarmMessage>, hb_channel: mpsc::Sender<u64>, reset_sender : mpsc::Sender<ResetMessage>) -> Self {
+    pub fn new(socket: TcpStream,
+               channel: mpsc::Receiver<AlarmMessage>,
+               hb_channel: mpsc::Sender<u64>,
+               reset_sender : mpsc::Sender<ResetMessage>,
+               decoder: Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>) -> Self {
         Self {
             socket,
             alarm_rx: channel,
             interval_tx: hb_channel,
-            reset_tx: reset_sender
+            reset_tx: reset_sender,
+            decoder
         }
     }
 
@@ -33,6 +49,8 @@ impl SocketActor {
         fix_println!("Starting SocketActor");
 
         let mut buf = BytesMut::with_capacity(1024 * 128);
+
+        let mut decoder = self.decoder.lock().await; // Lock the decoder for mutable access
 
         fix_println!("Connection received from:{}", self.socket.peer_addr().unwrap());
 
@@ -50,8 +68,10 @@ impl SocketActor {
             };
 
             if (n > 0 ) {
-                fix_println!("Got:{}",String::from_utf8_lossy(&buf).to_string())
+                fix_println!("Got1:{}",String::from_utf8_lossy(&buf).to_string());
                 //todo:call a onRead() callBack
+                let Some(x) = decoder.decode(&mut buf).unwrap() else { todo!() };
+                fix_println!("Got2:{}",x);
             }
 
             // Assuming we get some bytes did we get enough for a whole fix message
@@ -65,7 +85,10 @@ impl SocketActor {
                 sent = true;
             }
 
-            //todo:is there a drain function or receive all ?
+            //todo:is there a drain function or receive all ? \
+            //     we should perhaps call something onTimeOut / or onAlarm callback rather than \
+            //     knowing about HB.
+
             if let Some(response) = self.alarm_rx.recv().await {
 
             //    println!("{}:SA: Alarm received", chrono::offset::Utc::now().format("%H:%M:%S.%3f").to_string().as_str());
