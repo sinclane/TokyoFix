@@ -1,0 +1,20 @@
+# todo: think about the structure.
+# todo: How to use blocks, yet build the settings in main
+# todo: but be able to define the structs within the relevant modules
+
+#[fix_service]
+type = "server"
+
+#[fix_server]
+listen_port = 8080
+
+#[fix_client]
+server_port = 8080
+
+#[fix_session]
+target_comp_id     = "CLIENT"
+sender_comp_id     = "SERVER"
+version            = "4.2"
+heartbeat_interval = 30
+
+
