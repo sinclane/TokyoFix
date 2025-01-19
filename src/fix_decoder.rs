@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Error;
 use std::io::ErrorKind::InvalidData;
-use bytes::{Buf, BytesMut};
+use bytes::{BytesMut};
 use tokio_util::codec;
 use tokio_util::codec::{Decoder};
 use std::io::{self,Write};
@@ -51,16 +51,14 @@ impl Decoder for MyFIXDecoder {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
 
-        fix_println!("Got here, yay!");
         //Check in the first 12 bytes to see if tags 8= & 9= are present.
         //63 bytes is the smallest valid FIX message
-        if( src.len() >= 63 ) {
-            if (src[0..12].eq_ignore_ascii_case(&self.header1)) {
+        if src.len() >= 63  {
+            if src[0..12].eq_ignore_ascii_case(&self.header1) {
                 let mut length_sz: usize = 0;
                 let mut length: usize = 0;
 
                 //Now fetch the body length from tag 9= and see if that many bytes are available
-                let ch = src[12..].iter();
                 let mut i = 12;
 
                 while src[i] != FIX_SEPARATOR && i < src.len() {
@@ -78,10 +76,9 @@ impl Decoder for MyFIXDecoder {
                 //so if x = (12 + length_sz + 1 + length[min:43] + 7) bytes are present we have a valid fix msg  ... maybe.
                 let msg_end = 20 + length_sz + length;
 
-                if (src.len() >= msg_end) {
+                if src.len() >= msg_end {
 
-                    //Now get next 7 bytes which should be the checksum.
-                    let msg = &src.iter().as_slice()[0..msg_end - 7];
+                    let msg = &src.iter().as_slice()[0..msg_end];
 
                     // validate the checksum.
                     let d1 = src[msg_end - 4];
@@ -93,7 +90,7 @@ impl Decoder for MyFIXDecoder {
                         let n1 = d1 as usize - 0x30;
                         let n2 = d2 as usize - 0x30;
                         let n3 = d3 as usize - 0x30;
-                        let cksum = (n1 * 100) + (n2 * 10) + n3;
+                        //let cksum = (n1 * 100) + (n2 * 10) + n3;
 
                         // copy the data out of the buffer and into the heap
                         // todo: fix this, its not right.
@@ -106,8 +103,8 @@ impl Decoder for MyFIXDecoder {
                     } else {
                         return Err(Error::new(InvalidData, "Likely incorrect tag9 value"))
                     }
-                } else { return(Ok(None)); }
-            } else { return(Ok(None)); }
+                } else { return Ok(None); }
+            } else { return Ok(None); }
         }
         Ok(None)
     }
