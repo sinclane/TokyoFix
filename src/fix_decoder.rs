@@ -90,7 +90,7 @@ impl Decoder for MyFIXDecoder {
                         let n1 = d1 as usize - 0x30;
                         let n2 = d2 as usize - 0x30;
                         let n3 = d3 as usize - 0x30;
-                        //let cksum = (n1 * 100) + (n2 * 10) + n3;
+                        let cksum = (n1 * 100) + (n2 * 10) + n3;
 
                         // copy the data out of the buffer and into the heap
                         // todo: fix this, its not right.
