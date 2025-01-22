@@ -60,25 +60,26 @@ impl FixSessionHandler {
 
 #[allow(dead_code)]
 pub trait FixMsgHandler {
-    fn on_heartbeat(&self);
-    fn on_logon_request(&self, message: String);
-    fn on_test_request(&self);
-    fn on_session_level_reject(&self);
-    fn on_dont_know(&self);
-    fn on_new_order_single(&self);
-    fn on_accepted(&self);
-    fn on_acknowledged(&self);
-    fn on_cancel_request(&self);
-    fn on_cancel_accepted(&self);
-    fn on_cancel_rejected(&self);
-    fn on_cxl_replace_request(&self);
-    fn on_cxl_replace_accepted(&self);
-    fn on_cxl_replace_rejected(&self);
-    fn on_execution_report(&self);
+    fn on_heartbeat(&mut self);
+    fn on_logon_request(&mut self, message: String);
+    fn on_test_request(&mut self);
+    fn on_session_level_reject(&mut self);
+    fn on_dont_know(&mut self);
+    fn on_new_order_single(&mut self);
+    fn on_accepted(&mut self);
+    fn on_acknowledged(&mut self);
+    fn on_cancel_request(&mut self);
+    fn on_cancel_accepted(&mut self);
+    fn on_cancel_rejected(&mut self);
+    fn on_cxl_replace_request(&mut self);
+    fn on_cxl_replace_accepted(&mut self);
+    fn on_cxl_replace_rejected(&mut self);
+    fn on_execution_report(&mut self);
+    fn create_and_send_heartbeat(&mut self, request_id: &str);
 }
 
 impl SocketActorCallback for FixSessionHandler {
-    fn on_message_rx(&self, message: String) {
+    fn on_message_rx(&mut self, message: String) {
         // todo! : split message into hdr1, hdr2, body, trailer \
         //         validate hdr2
         //         pass body onto application_msg_handler
@@ -103,10 +104,9 @@ impl SocketActorCallback for FixSessionHandler {
         }
     }
 
-    fn on_alarm_rx(&self, message: String) {
+    fn on_alarm_rx(&mut self, message: String) {
         //todo!()
         fix_println!("Creating HB:{}",message);
-        self.msg_handler.send_heartbeat();
-        //createHeartBeat
+        self.msg_handler.create_and_send_heartbeat("");
     }
 }

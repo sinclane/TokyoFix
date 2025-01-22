@@ -18,30 +18,42 @@ pub struct SocketActor {
     socket: TcpStream,
     alarm_rx: mpsc::Receiver<AlarmMessage>,
     interval_tx: mpsc::Sender<u64>,
+    writable_rx: mpsc::Receiver<ApplicationMessage>,
     reset_tx: mpsc::Sender<ResetMessage>,
     decoder: Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>,
     callback: Arc<Mutex<dyn SocketActorCallback + Send + Sync>>
 }
 
+pub struct ApplicationMessage {
+    message: String
+}
+
+impl ApplicationMessage {
+
+    pub fn new(message: String) -> ApplicationMessage { ApplicationMessage { message } }
+}
+
 pub trait SocketActorCallback {
-    fn on_message_rx(&self, message: String);
-    fn on_alarm_rx(&self, message: String);
+    fn on_message_rx(&mut self, message: String);
+    fn on_alarm_rx(&mut self, message: String);
 }
 
 // Try to avoid Socket Actor knowing anything about the message structure/protocol.
 // Hence decoder is passed in as a dyn
 impl SocketActor {
-    pub fn new(socket: TcpStream,
-               channel: mpsc::Receiver<AlarmMessage>,
+    pub fn new(socket:       TcpStream,
+               channel:      mpsc::Receiver<AlarmMessage>,
                hb_channel: mpsc::Sender<u64>,
-               reset_sender : mpsc::Sender<ResetMessage>,
-               decoder: Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>,
-               callback: Arc<Mutex<dyn SocketActorCallback + Send + Sync>> ) -> Self {
+               msg_channel:  mpsc::Receiver<ApplicationMessage>,
+               reset_sender: mpsc::Sender<ResetMessage>,
+               decoder:      Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>,
+               callback:     Arc<Mutex<dyn SocketActorCallback + Send + Sync>> ) -> Self {
         Self {
             socket,
-            alarm_rx: channel,
+            alarm_rx:    channel,
             interval_tx: hb_channel,
-            reset_tx: reset_sender,
+            writable_rx: msg_channel,
+            reset_tx:    reset_sender,
             decoder,
             callback
         }
@@ -60,10 +72,8 @@ impl SocketActor {
 
         loop {
 
-            let n = match self.socket.try_read_buf(&mut buf) {
-               // socket closed
-               Ok(n) if n == 0 => {0},
-               Ok(n) => {n},
+            let num_bytes = match self.socket.try_read_buf(&mut buf) {
+               Ok(num_bytes) => { if num_bytes == 0 { break; } else {num_bytes} },
                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {0}
                Err(e) => {
                    eprintln!("failed to read from socket; err = {:?}", e);
@@ -71,7 +81,7 @@ impl SocketActor {
                }
             };
 
-            if n > 0 {
+            if num_bytes > 0 {
                 //todo:call a onRead() callBack
                 let Some(x) = decoder.decode(&mut buf).unwrap() else { todo!() };
                 // a single callback for now but it could be a list of callbacks I guess.
@@ -80,38 +90,43 @@ impl SocketActor {
                 //self.callback.onMessage_rx(x).await;
             }
 
-            // Assuming we get some bytes did we get enough for a whole fix message
-            // If we got a whole fix message what msg did we get
-            // If we got a logon request and we are not already logged on then start logon
-            // From the message extract the HB interval
-            // Tell the HBer how many seconds to send a HB prompt
-            /*
-            if sent == false {
-                self.interval_tx.send(3000).await.unwrap();
-                sent = true;
-            }*/
-
-            //todo:is there a drain function or receive all ? \
-            //     we should perhaps call something onTimeOut / or onAlarm callback rather than \
-            //     knowing about HB.
-
             if let Some(_) = self.alarm_rx.recv().await {
-
-
-            let callback = self.callback.lock().await.on_alarm_rx(String::from("TBD"));
-
-            //    println!("{}:SA: Alarm received", chrono::offset::Utc::now().format("%H:%M:%S.%3f").to_string().as_str());
-
-                //todo:write HBmessage into buf
+                // This should cause a Response to be written in to the application Message mpsc channel
+                let callback = self.callback.lock().await.on_alarm_rx(String::from("TBD"));
+                /*
                 let hb = "8=FIX.4.29=7435=034=049=TEST_SENDER56=TEST_TARGET52=20241228-17:10:29.938112=test";
                 Self::generate_check_sum(hb);
                 self.socket.write_all(hb.as_bytes()).await.expect("TODO: panic message");
                 //todo: handle this gracefully . Perhaps just drop out of loop ( can we check reason code ).
                 fix_println!("Sending:{}",hb);
                 self.reset_tx.try_send(ResetMessage::Reset).unwrap();
+                */
             }
 
-            //todo: if I have bytes to write, write them
+            if let Some(writable) = self.writable_rx.recv().await {
+
+                let msg = writable.message.as_bytes();
+
+                //todo: need some buffer, store, queue to append the created messages to
+                //      the try_write many write multiple messages or just a bit of one
+                //      don't assume anything ...
+                let num_bytes = match self.socket.try_write(msg) {
+                    Ok(num_bytes) => { if num_bytes == 0 { break; } else { num_bytes } },
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => { 0 }
+                    Err(e) => {
+                        eprintln!("failed to read from socket; err = {:?}", e);
+                        return;
+                    }
+                };
+
+                if num_bytes > 0 {
+
+                    //todo: this tells the Countdown Timer to reset itself as a message has been /is being written
+                    //      This is part of the FIX protocal and so should prob be moved up a layer.
+                    //      Need to make sure that all the messages are sequence properly.
+                    self.reset_tx.try_send(ResetMessage::Reset).unwrap();
+                }
+            }
         }
     }
 

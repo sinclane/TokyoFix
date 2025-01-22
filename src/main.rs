@@ -19,6 +19,7 @@ use tokio_util::codec::Decoder;
 use crate::fix_decoder::MyFIXDecoder;
 use crate::fix_session_handler::FixSessionHandler;
 use crate::fix_msg_handler::MyFixMsgHandler;
+use crate::socket_actor::ApplicationMessage;
 
 /// Custom `print!` macro that adds a timestamp to log messages
 #[macro_export]
@@ -55,8 +56,10 @@ async fn main() -> io::Result<()> {
     let listener = TcpListener::bind(local_addr).await?;
 
     let (interval_tx, interval_rx) = mpsc::channel::<u64>(8);
-    let (alarm_tx, alarm_rx) = mpsc::channel::<AlarmMessage>(8);
-    let (reset_tx, reset_rx) = mpsc::channel::<ResetMessage>(8);
+    let (alarm_tx, alarm_rx)       = mpsc::channel::<AlarmMessage>(8);
+    let (reset_tx, reset_rx)       = mpsc::channel::<ResetMessage>(8);
+    let (app_msg_tx, app_msg_rx)   = mpsc::channel::<ApplicationMessage>(8);
+
     let (_socket, _) = listener.accept().await?;
 
 
@@ -69,14 +72,14 @@ async fn main() -> io::Result<()> {
     let decoder_impl = Arc::new(Mutex::new(MyFIXDecoder::new(&settings)));
     let decoder_clone = Arc::clone(&decoder_impl);
 
-    let msg_handler_impl = Arc::new(MyFixMsgHandler::new(interval_tx.clone()));
+    let msg_handler_impl = Arc::new(MyFixMsgHandler::new(interval_tx.clone(), app_msg_tx.clone()));
     let msg_handler_clone = Arc::clone(&msg_handler_impl);
 
     let callback_impl = Arc::new(Mutex::new(FixSessionHandler::new(msg_handler_clone)));
     let callback_clone = Arc::clone(&callback_impl);
 
     let sa_task = tokio::spawn(async move {
-        let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx.clone(), reset_tx, decoder_clone, callback_clone);
+        let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx.clone(), app_msg_rx, reset_tx, decoder_clone, callback_clone);
         fix_println!("Starting SocketActor.");
         sa.start().await;
     });

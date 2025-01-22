@@ -6,14 +6,14 @@ use crate::fix_42::value_types::FixTag;
 
 const FIX_FIELD_SEPARATOR: u8 = 0x01;
 
-fn create_fix_header(buf:&mut String, length:usize, seq_no:i32, msg_type: fix_42::attribute_enums::MsgType) {
+fn create_fix_header(buf:&mut String, length:usize, seq_no:&i32, msg_type: fix_42::attribute_enums::MsgType) {
 
 
     //"8=FIX.4.2|9=74|35=0"
     let mut tmp:String = String::from("");
 
     add_char_field(&mut tmp, tags::MSG_TYPE, msg_type.value());
-    add_seqnum_field(&mut tmp, tags::MSG_SEQ_NO,seq_no);
+    add_seqnum_field(&mut tmp, tags::MSG_SEQ_NO,*seq_no);
     add_string_field(&mut tmp, tags::SENDER_COMP_ID, "TEST_SERVER");
     add_string_field(&mut tmp, tags::TARGET_COMP_ID, "TEST_CLIENT");
     add_timestamp_field(&mut tmp, tags::SENDING_TIME, chrono::offset::Utc::now());
@@ -29,7 +29,7 @@ fn create_fix_trailer(buf:&mut String)  {
     add_checksum_field(buf, tags::CHECK_SUM, generate_check_sum(buf));
 }
 
-pub fn create_fix_heartbeat(buf:&mut String, seq_no:i32, test_request_id: &str){
+pub fn create_fix_heartbeat(buf:&mut String, seq_no:&i32, test_request_id: &str){
 
     let mut tmp:String = String::from("");
 
@@ -45,7 +45,7 @@ pub fn create_fix_heartbeat(buf:&mut String, seq_no:i32, test_request_id: &str){
     create_fix_trailer(buf);
 }
 
-fn create_fix_logon(buf:&mut String, seq_no:i32, hb_interval: i32, encryption_method :attribute_enums::EncryptMethod, hb_internal: usize) {
+fn create_fix_logon(buf:&mut String, seq_no:&i32, hb_interval: i32, encryption_method :attribute_enums::EncryptMethod, hb_internal: usize) {
     let mut tmp: String = String::from("");
 
     add_char_field(&mut tmp, tags::ENCRYPT_METHOD, encryption_method.value());
@@ -60,7 +60,7 @@ fn create_fix_logon(buf:&mut String, seq_no:i32, hb_interval: i32, encryption_me
     create_fix_trailer(buf);
 }
 
-fn create_fix_test_request(buf:&mut String, seq_no:i32) {
+fn create_fix_test_request(buf:&mut String, seq_no:&i32) {
 
     let mut tmp: String = String::from("");
     // Then once complete calculate the overall length using the body length as input
@@ -72,14 +72,14 @@ fn create_fix_test_request(buf:&mut String, seq_no:i32) {
     create_fix_trailer(buf);
 }
 
-fn add_checksum_field(buf:&mut String, tag :attribute_enums, cksum:usize){
+fn add_checksum_field(buf:&mut String, tag :FixTag, cksum:usize){
     buf.push_str(tag.id());
     buf.push('=');
     buf.push_str(format!("{:03}",cksum).as_str());
     buf.push('');
 }
 
-fn add_timestamp_field(buf:&mut String, tag :attribute_enums, timestamp:DateTime<chrono::offset::Utc>){
+fn add_timestamp_field(buf:&mut String, tag :FixTag, timestamp:DateTime<chrono::offset::Utc>){
     buf.push_str(tag.id());
     buf.push('=');
     buf.push_str(timestamp.format("%Y%m%d-%H:%M:%S%.3f").to_string().as_str());

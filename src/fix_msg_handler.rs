@@ -1,16 +1,18 @@
 use std::collections::HashMap;
-use crate::fix_println;
+use crate::{fix_msg_builder, fix_println};
 use crate::fix_session_handler::FixMsgHandler;
 use std::io::Write;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use crate::countdown_actor::ResetMessage;
 use crate::fix_42::tags;
+use crate::socket_actor::ApplicationMessage;
 
 pub struct MyFixMsgHandler {
 
-    interval_tx : mpsc::Sender<u64>,
-    fix_status : FixStatus
+    interval_tx : Sender<u64>,
+    app_msg_tx  : Sender<ApplicationMessage>,
+    fix_status  : FixStatus
 }
 
 struct FixStatus {
@@ -24,9 +26,8 @@ impl FixStatus {
 }
 
 impl MyFixMsgHandler {
-    pub fn new(interval_sender : Sender<u64>) -> Self {
-        Self {interval_tx : interval_sender, fix_status : FixStatus::new()}
-
+    pub fn new(interval_sender : Sender<u64>, app_msg_sender : Sender<ApplicationMessage>) -> Self {
+        Self {interval_tx : interval_sender, app_msg_tx: app_msg_sender, fix_status : FixStatus::new()}
     }
 }
 pub fn parse_fix_message(buf:&str, hmap:&mut HashMap<String, String>)  {
@@ -56,12 +57,12 @@ pub fn parse_fix_message(buf:&str, hmap:&mut HashMap<String, String>)  {
 
 impl FixMsgHandler for MyFixMsgHandler {
 
-    fn on_heartbeat(&self) {
+    fn on_heartbeat(&mut self) {
         fix_println!("Received a Heartbeat message");
         //todo!()
     }
 
-    fn on_logon_request(&self, message: String) {
+    fn on_logon_request(&mut self, message: String) {
         //todo!()
         fix_println!("Received a logon Request");
 
@@ -79,58 +80,76 @@ impl FixMsgHandler for MyFixMsgHandler {
         // TODO: There has to be a nicer way of doing this - don't want to have to clone it each time I call it
         // Perhaps: x.blocking_send(heartbeat_interval * 1000).expect("TODO: panic message");
         let x = self.interval_tx.clone();
+
         tokio::spawn( async move { x.send(heartbeat_interval * 1000).await.expect("TODO: panic message")});
+
+        //This is the initial response to the logon request
+        //
+        self.create_and_send_heartbeat("Logon Accepted");
     }
 
-    fn on_test_request(&self) {
+    fn create_and_send_heartbeat(&mut self, test_request_id: &str) {
+
+        let mut hb = String::new(); // "8=FIX.4.29=7435=034=049=TEST_SENDER56=TEST_TARGET52=20241228-17:10:29.938112=test";
+
+        fix_msg_builder::create_fix_heartbeat(&mut hb, &self.fix_status.next_seq_id_to_send, test_request_id);
+
+        self.fix_status.next_seq_id_to_send += 1;
+
+        let msg = ApplicationMessage::new(hb);
+
+        self.app_msg_tx.blocking_send(msg).unwrap();
+    }
+
+    fn on_test_request(&mut self) {
         todo!()
     }
 
-    fn on_session_level_reject(&self) {
+    fn on_session_level_reject(&mut self) {
         todo!()
     }
 
-    fn on_dont_know(&self) {
+    fn on_dont_know(&mut self) {
         todo!()
     }
 
-    fn on_new_order_single(&self) {
+    fn on_new_order_single(&mut self) {
         todo!()
     }
 
-    fn on_accepted(&self) {
+    fn on_accepted(&mut self) {
         todo!()
     }
 
-    fn on_acknowledged(&self) {
+    fn on_acknowledged(&mut self) {
         todo!()
     }
 
-    fn on_cancel_request(&self) {
+    fn on_cancel_request(&mut self) {
         todo!()
     }
 
-    fn on_cancel_accepted(&self) {
+    fn on_cancel_accepted(&mut self) {
         todo!()
     }
 
-    fn on_cancel_rejected(&self) {
+    fn on_cancel_rejected(&mut self) {
         todo!()
     }
 
-    fn on_cxl_replace_request(&self) {
+    fn on_cxl_replace_request(&mut self) {
         todo!()
     }
 
-    fn on_cxl_replace_accepted(&self) {
+    fn on_cxl_replace_accepted(&mut self) {
         todo!()
     }
 
-    fn on_cxl_replace_rejected(&self) {
+    fn on_cxl_replace_rejected(&mut self) {
         todo!()
     }
 
-    fn on_execution_report(&self) {
+    fn on_execution_report(&mut self) {
         todo!()
     }
 }

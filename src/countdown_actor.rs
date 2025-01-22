@@ -11,16 +11,10 @@ pub struct CountdownActor {
     interval_rx: mpsc::Receiver<u64>,
 }
 
-pub enum AlarmMessage {
-    Alarm
-}
-
-pub enum ResetMessage {
-    Reset
-}
+pub enum AlarmMessage { Alarm }
+pub enum ResetMessage { Reset }
 
 impl CountdownActor {
-
     pub fn new(alarm_sender : mpsc::Sender<AlarmMessage>, interval_receiver : mpsc::Receiver<u64>, reset_receiver : mpsc::Receiver<ResetMessage>)  -> Self {
         Self {
             heartbeat_internal_ms: 0,
@@ -63,29 +57,6 @@ impl CountdownActor {
             }
         } else {
             eprintln!("CountdownActor: Failed to receive initial interval");
-        }
-    }
-
-    pub async fn startx(&mut self)  {
-
-        fix_println!("CountdownActor::start");
-
-        if let Some(response) = self.interval_rx.recv().await {
-            self.heartbeat_internal_ms = response;
-        }
-
-        fix_println!("HeartBeat interval set to: {}", self.heartbeat_internal_ms);
-        if self.heartbeat_internal_ms > 0 {
-
-            let mut interval = time::interval(time::Duration::from_millis(self.heartbeat_internal_ms));
-
-            loop {
-                fix_println!("Waiting for {} milliseconds.", self.heartbeat_internal_ms);
-                interval.tick().await;
-                let _ = self.alarm_tx.send(AlarmMessage::Alarm).await;
-                fix_println!("HB request sent");
-
-            }
         }
     }
 }
