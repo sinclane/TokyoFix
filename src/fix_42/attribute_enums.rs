@@ -1,5 +1,3 @@
-
-
 use std::clone::Clone;
 use std::fmt::{Display, Formatter};
 

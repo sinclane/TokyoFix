@@ -2,13 +2,31 @@ use std::collections::HashMap;
 use crate::fix_println;
 use crate::fix_session_handler::FixMsgHandler;
 use std::io::Write;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
+use crate::countdown_actor::ResetMessage;
 use crate::fix_42::tags;
 
-pub struct MyFixMsgHandler { }
+pub struct MyFixMsgHandler {
+
+    interval_tx : mpsc::Sender<u64>,
+    fix_status : FixStatus
+}
+
+struct FixStatus {
+    logon_complete : bool,
+    next_seq_id_to_send : i32,
+    next_seq_id_ro_recv : i32
+}
+
+impl FixStatus {
+    fn new() -> FixStatus {  FixStatus { logon_complete :  false, next_seq_id_to_send : 0, next_seq_id_ro_recv: 0 }  }
+}
 
 impl MyFixMsgHandler {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(interval_sender : Sender<u64>) -> Self {
+        Self {interval_tx : interval_sender, fix_status : FixStatus::new()}
+
     }
 }
 pub fn parse_fix_message(buf:&str, hmap:&mut HashMap<String, String>)  {
@@ -51,9 +69,17 @@ impl FixMsgHandler for MyFixMsgHandler {
 
         parse_fix_message(message.as_str(), &mut hmap);
 
-        let heartbeat_interval:i32 = hmap.get(tags::HEARTBT_INT.id()).unwrap().parse().unwrap();
+        let heartbeat_interval:u64 = hmap.get(tags::HEARTBT_INT.id()).unwrap().parse().unwrap();
 
         fix_println!("Remote side has requested an HB interval of {} seconds.", heartbeat_interval);
+
+        //make sure the future is waited for so something happens.
+        fix_println!("Initiating HB.");
+
+        // TODO: There has to be a nicer way of doing this - don't want to have to clone it each time I call it
+        // Perhaps: x.blocking_send(heartbeat_interval * 1000).expect("TODO: panic message");
+        let x = self.interval_tx.clone();
+        tokio::spawn( async move { x.send(heartbeat_interval * 1000).await.expect("TODO: panic message")});
     }
 
     fn on_test_request(&self) {

@@ -4,6 +4,7 @@ mod fix_decoder;
 mod fix_session_handler;
 mod fix_msg_handler;
 mod fix_42;
+mod fix_msg_builder;
 
 use crate::fix_session_handler::FixMsgHandler;
 use crate::countdown_actor::{AlarmMessage, ResetMessage};
@@ -58,26 +59,28 @@ async fn main() -> io::Result<()> {
     let (reset_tx, reset_rx) = mpsc::channel::<ResetMessage>(8);
     let (_socket, _) = listener.accept().await?;
 
+
+    let hb_task = tokio::spawn(async move {
+        let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
+        fix_println!("Starting CountdownActor.");
+        hb.start().await;
+    });
+
     let decoder_impl = Arc::new(Mutex::new(MyFIXDecoder::new(&settings)));
     let decoder_clone = Arc::clone(&decoder_impl);
 
-    let msg_handler_impl = Arc::new(MyFixMsgHandler::new());
+    let msg_handler_impl = Arc::new(MyFixMsgHandler::new(interval_tx.clone()));
     let msg_handler_clone = Arc::clone(&msg_handler_impl);
 
     let callback_impl = Arc::new(Mutex::new(FixSessionHandler::new(msg_handler_clone)));
     let callback_clone = Arc::clone(&callback_impl);
 
     let sa_task = tokio::spawn(async move {
-
-        let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx, reset_tx, decoder_clone, callback_clone);
+        let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx.clone(), reset_tx, decoder_clone, callback_clone);
         fix_println!("Starting SocketActor.");
         sa.start().await;
     });
-    let hb_task = tokio::spawn(async move {
-        let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
-        fix_println!("Starting CountdownActor.");
-        hb.start().await;
-    });
+
 
     let _ = tokio::join!(sa_task, hb_task);
 

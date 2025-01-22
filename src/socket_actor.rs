@@ -28,9 +28,6 @@ pub trait SocketActorCallback {
     fn on_alarm_rx(&self, message: String);
 }
 
-type RxCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
-type TxCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
-
 // Try to avoid Socket Actor knowing anything about the message structure/protocol.
 // Hence decoder is passed in as a dyn
 impl SocketActor {
@@ -88,17 +85,20 @@ impl SocketActor {
             // If we got a logon request and we are not already logged on then start logon
             // From the message extract the HB interval
             // Tell the HBer how many seconds to send a HB prompt
-
+            /*
             if sent == false {
                 self.interval_tx.send(3000).await.unwrap();
                 sent = true;
-            }
+            }*/
 
             //todo:is there a drain function or receive all ? \
             //     we should perhaps call something onTimeOut / or onAlarm callback rather than \
             //     knowing about HB.
 
             if let Some(_) = self.alarm_rx.recv().await {
+
+
+            let callback = self.callback.lock().await.on_alarm_rx(String::from("TBD"));
 
             //    println!("{}:SA: Alarm received", chrono::offset::Utc::now().format("%H:%M:%S.%3f").to_string().as_str());
 

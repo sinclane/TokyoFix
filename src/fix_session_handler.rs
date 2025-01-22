@@ -58,6 +58,7 @@ impl FixSessionHandler {
     }
 }
 
+#[allow(dead_code)]
 pub trait FixMsgHandler {
     fn on_heartbeat(&self);
     fn on_logon_request(&self, message: String);
@@ -104,8 +105,8 @@ impl SocketActorCallback for FixSessionHandler {
 
     fn on_alarm_rx(&self, message: String) {
         //todo!()
-        fix_println!("Got2:{}",message);
-
+        fix_println!("Creating HB:{}",message);
+        self.msg_handler.send_heartbeat();
         //createHeartBeat
     }
 }
