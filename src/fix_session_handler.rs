@@ -121,7 +121,7 @@ impl FixSessionHandler {
                     };
                 }
                 Err(TryRecvError::Empty) => {},
-                Err(TryRecvError::Disconnected) => fix_println!("AlarmRX: Channel closed"),
+                Err(TryRecvError::Disconnected) => {},
             };
 
             let x = self.alarm_rx.try_recv();
@@ -139,7 +139,7 @@ impl FixSessionHandler {
                     };
                 }
                 Err(TryRecvError::Empty) => {},
-                Err(TryRecvError::Disconnected) => fix_println!("AlarmRX: Channel closed"),
+                Err(TryRecvError::Disconnected) => { },
             };
         }
     }

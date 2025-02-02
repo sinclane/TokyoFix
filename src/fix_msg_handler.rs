@@ -108,6 +108,10 @@ impl MyFixMsgHandler {
         let msg = ApplicationMessage::new(hb);
 
         self.app_msg_tx.send(msg).await.unwrap();
+
+        let outstanding = self.app_msg_tx.max_capacity() - self.app_msg_tx.capacity();
+
+        fix_println!("MH->SC Queue size:{}",outstanding);
     }
 
     async fn on_test_request(&mut self, message: String) {

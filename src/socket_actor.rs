@@ -91,23 +91,12 @@ impl SocketActor {
                     Err(e) => {eprintln!("failed to send to Session Handler.{}",e);}
                 }
             }
-/*
-            if let Some(_) = self.alarm_rx.recv().await {
-                // This should cause a Response to be written in to the application Message mpsc channel
-                let callback = self.callback.lock().await.on_alarm_rx(String::from("TBD"));
-                /*
-                let hb = "8=FIX.4.29=7435=034=049=TEST_SENDER56=TEST_TARGET52=20241228-17:10:29.938112=test";
-                Self::generate_check_sum(hb);
-                self.socket.write_all(hb.as_bytes()).await.expect("TODO: panic message");
-                //todo: handle this gracefully . Perhaps just drop out of loop ( can we check reason code ).
-                fix_println!("Sending:{}",hb);
-                self.reset_tx.try_send(ResetMessage::Reset).unwrap();
-                */
+
+            if self.writable_rx.len() > 0 {
+                eprintln!("MH->SK: msgs pending={}", self.writable_rx.len());
             }
 
- */
             let result =  self.writable_rx.recv().await;
-
             match result {
                 Some(writable) => {
                     let msg = writable.message.as_bytes();
@@ -116,8 +105,8 @@ impl SocketActor {
                     //      the try_write many write multiple messages or just a bit of one
                     //      don't assume anything ...
                     let num_bytes = match self.socket.try_write(msg) {
-                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { num_bytes } },
-                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => { 0 }
+                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { eprintln!("Wrote {} bytes to socket", num_bytes ); num_bytes}},
+                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => { 0 },
                         Err(e) => {
                             eprintln!("failed to read from socket; err = {:?}", e);
                             return;
@@ -129,7 +118,7 @@ impl SocketActor {
                         //todo: this tells the Countdown Timer to reset itself as a message has been /is being written
                         //      This is part of the FIX protocal and so should prob be moved up a layer.
                         //      Need to make sure that all the messages are sequence properly.
-                        self.reset_tx.try_send(ResetMessage::Reset).unwrap();
+                        //self.reset_tx.try_send(ResetMessage::Reset).unwrap();
                     }
                 }
                 None => { println!("Couldn't get msg"); }
