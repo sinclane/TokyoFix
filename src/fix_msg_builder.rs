@@ -31,7 +31,7 @@ fn create_fix_trailer(buf:&mut String)  {
 
 pub fn create_fix_heartbeat(buf:&mut String, seq_no:&i32, test_request_id: &str){
 
-    let mut tmp:String = String::from("");
+    let mut tmp:String = String::new();
 
     if test_request_id.len() > 0 {
         add_string_field(&mut tmp, tags::TEST_REQ_ID, test_request_id);

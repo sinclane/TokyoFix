@@ -1,16 +1,19 @@
 use std::collections::HashMap;
 use crate::{fix_msg_builder, fix_println};
-use crate::fix_session_handler::FixMsgHandler;
+use crate::fix_session_handler::{FixMessage, FixMsgHandler};
 use std::io::Write;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::error::TryRecvError;
 use crate::countdown_actor::ResetMessage;
+use crate::fix_42::attribute_enums::{FixEnum, MsgType};
 use crate::fix_42::tags;
 use crate::socket_actor::ApplicationMessage;
 
 pub struct MyFixMsgHandler {
 
     interval_tx : Sender<u64>,
+    fix_msg_rx  : Receiver<FixMessage>,
     app_msg_tx  : Sender<ApplicationMessage>,
     fix_status  : FixStatus
 }
@@ -26,8 +29,115 @@ impl FixStatus {
 }
 
 impl MyFixMsgHandler {
-    pub fn new(interval_sender : Sender<u64>, app_msg_sender : Sender<ApplicationMessage>) -> Self {
-        Self {interval_tx : interval_sender, app_msg_tx: app_msg_sender, fix_status : FixStatus::new()}
+
+    pub fn new(interval_sender : Sender<u64>, sess_hdl_recvr : Receiver<FixMessage>, app_msg_sender : Sender<ApplicationMessage>) -> Self {
+        Self {interval_tx : interval_sender, fix_msg_rx: sess_hdl_recvr, app_msg_tx: app_msg_sender, fix_status : FixStatus::new()}
+    }
+
+    pub async fn run(mut self) {
+
+        fix_println!("Start Msg handler loop.");
+
+        loop {
+            fix_println!("MH_RX Queue size:{}",self.fix_msg_rx.len());
+            let recvd = self.fix_msg_rx.recv().await;
+            match recvd {
+                None => { },
+                Some(msg) => {
+                    if msg.get_msg_type() == MsgType::Logon.value() {
+                        fix_println!("Calling: on_logon");
+                        self.on_logon_request(msg.get_body()).await;
+                    } else if msg.get_msg_type() == MsgType::TestRequest.value() {
+                        fix_println!("Calling: on_test_request");
+                        self.on_test_request(msg.get_body()).await;
+                    } else if msg.get_msg_type() == MsgType::HeartBeat.value() {
+                        fix_println!("Calling: on_heartbeat");
+                        self.on_heartbeat(msg.get_body());
+                    } else if msg.get_msg_type() == MsgType::SequenceReset.value() {
+                        fix_println!("Resetting Sequence Numbers.");
+                    } else {
+                        fix_println!("Unknown message type:'{}'",msg.get_msg_type());
+                    }
+                }
+            };
+        }
+    }
+
+    pub async fn run_with_try(mut self) {
+
+        fix_println!("Start Msg handler loop.");
+
+        loop {
+            let outstanding = self.fix_msg_rx.len();
+
+            if outstanding > 0 {
+                fix_println!("MH_RX Queue size:{}",outstanding);
+            }
+            let recvd = self.fix_msg_rx.try_recv();
+            match recvd {
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => fix_println!("MH_RX: something went wrong."),
+                Ok(msg) => {
+                    if msg.get_msg_type() == MsgType::Logon.value() {
+                        fix_println!("Calling: on_logon");
+                        self.on_logon_request(msg.get_body()).await;
+                    } else if msg.get_msg_type() == MsgType::TestRequest.value() {
+                        fix_println!("Calling: on_test_request");
+                        self.on_test_request(msg.get_body()).await;
+                    } else if msg.get_msg_type() == MsgType::HeartBeat.value() {
+                        fix_println!("Calling: on_heartbeat");
+                        self.on_heartbeat(msg.get_body());
+                    } else if msg.get_msg_type() == MsgType::SequenceReset.value() {
+                        fix_println!("Resetting Sequence Numbers.");
+                    } else {
+                        fix_println!("Unknown message type:'{}'",msg.get_msg_type());
+                    }
+                }
+            };
+        }
+    }
+
+    async fn create_and_send_heartbeat(&mut self, test_request_id: &str) {
+
+        let mut hb = String::new(); // "8=FIX.4.29=7435=034=049=TEST_SENDER56=TEST_TARGET52=20241228-17:10:29.938112=test";
+
+        fix_msg_builder::create_fix_heartbeat(&mut hb, &self.fix_status.next_seq_id_to_send, test_request_id);
+
+        self.fix_status.next_seq_id_to_send += 1;
+
+        let msg = ApplicationMessage::new(hb);
+
+        self.app_msg_tx.send(msg).await.unwrap();
+    }
+
+    async fn on_test_request(&mut self, message: String) {
+        self.create_and_send_heartbeat("XX").await;
+    }
+
+    async fn on_logon_request(&mut self, message: String) {
+        //todo!()
+        fix_println!("Received a logon Request");
+
+        let mut hmap = HashMap::new();
+
+        parse_fix_message(message.as_str(), &mut hmap);
+
+        let heartbeat_interval:u64 = hmap.get(tags::HEARTBT_INT.id()).unwrap().parse().unwrap();
+
+        fix_println!("Remote side has requested an HB interval of {} seconds.", heartbeat_interval);
+
+        //make sure the future is waited for so something happens.
+        fix_println!("Initiating HB.");
+
+        // TODO: There has to be a nicer way of doing this - don't want to have to clone it each time I call it
+        // Perhaps: x.blocking_send(heartbeat_interval * 1000).expect("TODO: panic message");
+        let x = self.interval_tx.clone();
+
+        tokio::spawn( async move { x.send(heartbeat_interval * 1000).await.expect("TODO: panic message")});
+
+        //This is the initial response to the logon request
+        //
+        self.create_and_send_heartbeat("Logon Accepted").await;
     }
 }
 pub fn parse_fix_message(buf:&str, hmap:&mut HashMap<String, String>)  {
@@ -57,53 +167,16 @@ pub fn parse_fix_message(buf:&str, hmap:&mut HashMap<String, String>)  {
 
 impl FixMsgHandler for MyFixMsgHandler {
 
-    fn on_heartbeat(&mut self) {
+    fn on_heartbeat(&mut self, message: String) {
         fix_println!("Received a Heartbeat message");
         //todo!()
     }
 
-    fn on_logon_request(&mut self, message: String) {
-        //todo!()
-        fix_println!("Received a logon Request");
 
-        let mut hmap = HashMap::new();
 
-        parse_fix_message(message.as_str(), &mut hmap);
 
-        let heartbeat_interval:u64 = hmap.get(tags::HEARTBT_INT.id()).unwrap().parse().unwrap();
 
-        fix_println!("Remote side has requested an HB interval of {} seconds.", heartbeat_interval);
 
-        //make sure the future is waited for so something happens.
-        fix_println!("Initiating HB.");
-
-        // TODO: There has to be a nicer way of doing this - don't want to have to clone it each time I call it
-        // Perhaps: x.blocking_send(heartbeat_interval * 1000).expect("TODO: panic message");
-        let x = self.interval_tx.clone();
-
-        tokio::spawn( async move { x.send(heartbeat_interval * 1000).await.expect("TODO: panic message")});
-
-        //This is the initial response to the logon request
-        //
-        self.create_and_send_heartbeat("Logon Accepted");
-    }
-
-    fn create_and_send_heartbeat(&mut self, test_request_id: &str) {
-
-        let mut hb = String::new(); // "8=FIX.4.29=7435=034=049=TEST_SENDER56=TEST_TARGET52=20241228-17:10:29.938112=test";
-
-        fix_msg_builder::create_fix_heartbeat(&mut hb, &self.fix_status.next_seq_id_to_send, test_request_id);
-
-        self.fix_status.next_seq_id_to_send += 1;
-
-        let msg = ApplicationMessage::new(hb);
-
-        self.app_msg_tx.blocking_send(msg).unwrap();
-    }
-
-    fn on_test_request(&mut self) {
-        todo!()
-    }
 
     fn on_session_level_reject(&mut self) {
         todo!()

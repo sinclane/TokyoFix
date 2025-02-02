@@ -6,7 +6,7 @@ mod fix_msg_handler;
 mod fix_42;
 mod fix_msg_builder;
 
-use crate::fix_session_handler::FixMsgHandler;
+use crate::fix_session_handler::{FixMessage, FixMsgHandler};
 use crate::countdown_actor::{AlarmMessage, ResetMessage};
 use config::{Config, File};
 use std::collections::HashMap;
@@ -55,12 +55,17 @@ async fn main() -> io::Result<()> {
 
     let listener = TcpListener::bind(local_addr).await?;
 
-    let (interval_tx, interval_rx) = mpsc::channel::<u64>(8);
-    let (alarm_tx, alarm_rx)       = mpsc::channel::<AlarmMessage>(8);
-    let (reset_tx, reset_rx)       = mpsc::channel::<ResetMessage>(8);
-    let (app_msg_tx, app_msg_rx)   = mpsc::channel::<ApplicationMessage>(8);
+    let (interval_tx, interval_rx)     = mpsc::channel::<u64>(8);
+    let (alarm_tx, alarm_rx)           = mpsc::channel::<AlarmMessage>(8);
+    let (reset_tx, reset_rx)           = mpsc::channel::<ResetMessage>(8);
+    let (mh2sc_msg_tx, mh2sc_msg_rx)   = mpsc::channel::<ApplicationMessage>(8);
 
-    let (_socket, _) = listener.accept().await?;
+    // For the session handler to msh handler msg passing.
+    let (sh2mh_tx, sh2mh_rx)   = mpsc::channel::<FixMessage>(8);
+
+    // For the socket handler to session handler msg passing.
+    let (sc2sh_tx, sc2sh_rx)   = mpsc::channel::<ApplicationMessage>(8);
+
 
 
     let hb_task = tokio::spawn(async move {
@@ -69,23 +74,31 @@ async fn main() -> io::Result<()> {
         hb.start().await;
     });
 
-    let decoder_impl = Arc::new(Mutex::new(MyFIXDecoder::new(&settings)));
-    let decoder_clone = Arc::clone(&decoder_impl);
-
-    let msg_handler_impl = Arc::new(MyFixMsgHandler::new(interval_tx.clone(), app_msg_tx.clone()));
-    let msg_handler_clone = Arc::clone(&msg_handler_impl);
-
-    let callback_impl = Arc::new(Mutex::new(FixSessionHandler::new(msg_handler_clone)));
-    let callback_clone = Arc::clone(&callback_impl);
-
-    let sa_task = tokio::spawn(async move {
-        let mut sa = socket_actor::SocketActor::new(_socket, alarm_rx, interval_tx.clone(), app_msg_rx, reset_tx, decoder_clone, callback_clone);
-        fix_println!("Starting SocketActor.");
-        sa.start().await;
+    let mh_interval_tx_clone = interval_tx.clone();
+    let mh_task = tokio::spawn(async move {
+        let mut mh  =  MyFixMsgHandler::new(mh_interval_tx_clone, sh2mh_rx, mh2sc_msg_tx);
+        fix_println!("Starting MyFixMsgHandler.");
+        mh.run_with_try().await;
     });
 
+    let sh_task = tokio::spawn(async move {
+        let mut sh =  FixSessionHandler::new(sc2sh_rx, sh2mh_tx, alarm_rx);
+        fix_println!("Starting FixSessionHandler.");
+        //sh.run().await;
+        sh.run_with_try().await;
+    });
 
-    let _ = tokio::join!(sa_task, hb_task);
+    let (_socket, _) = listener.accept().await?;
+    let decoder_impl = Arc::new(Mutex::new(MyFIXDecoder::new(&settings)));
+    let decoder_clone = Arc::clone(&decoder_impl);
+    let sa_interval_tx_clone = interval_tx.clone();
+    let sa_task = tokio::spawn(async move {
+        let mut sa = socket_actor::SocketActor::new(_socket, sa_interval_tx_clone, mh2sc_msg_rx, reset_tx, decoder_clone, sc2sh_tx);
+        fix_println!("Starting SocketActor.");
+        sa.run().await;
+    });
+
+    let _ = tokio::join!(sa_task, hb_task, mh_task, sh_task);
 
     Ok(())
 }
