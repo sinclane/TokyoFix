@@ -5,6 +5,7 @@ use std::io::Write;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::task::yield_now;
 use crate::countdown_actor::ResetMessage;
 use crate::fix_42::attribute_enums::{FixEnum, MsgType};
 use crate::fix_42::tags;
@@ -94,6 +95,7 @@ impl MyFixMsgHandler {
                     }
                 }
             };
+            yield_now().await;
         }
     }
 
@@ -107,11 +109,19 @@ impl MyFixMsgHandler {
 
         let msg = ApplicationMessage::new(hb);
 
-        self.app_msg_tx.send(msg).await.unwrap();
+        let outstanding = self.app_msg_tx.max_capacity() - self.app_msg_tx.capacity();
+        fix_println!("MH->SC waiting to send msg to socket: {}",outstanding);
+        let res = self.app_msg_tx.send(msg).await;
+        let outstanding = self.app_msg_tx.max_capacity() - self.app_msg_tx.capacity();
+        fix_println!("MH->SC sent msg to socket: {}",outstanding);
+
+        match res {
+            Ok(_) => {},
+            Err(e) => {fix_println!("Error sending FIX msg to socket handler {}",e);}
+        }
 
         let outstanding = self.app_msg_tx.max_capacity() - self.app_msg_tx.capacity();
-
-        fix_println!("MH->SC Queue size:{}",outstanding);
+        fix_println!("MH->SC queue size:{}",outstanding);
     }
 
     async fn on_test_request(&mut self, message: String) {

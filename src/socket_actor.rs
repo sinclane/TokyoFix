@@ -7,6 +7,11 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use std::io::{self,Write};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
+use tokio::task::yield_now;
+use tokio::time::error::Elapsed;
+use tokio::time::timeout;
 use tokio_util::codec::{Decoder};
 use crate::countdown_actor::AlarmMessage;
 use crate::countdown_actor::ResetMessage;
@@ -17,10 +22,10 @@ use crate::fix_println;
 pub struct SocketActor {
     socket:      TcpStream,
     interval_tx: mpsc::Sender<u64>,
-    writable_rx: mpsc::Receiver<ApplicationMessage>,
+    from_mh_rx:  mpsc::Receiver<ApplicationMessage>,
     reset_tx:    mpsc::Sender<ResetMessage>,
     decoder:     Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>,
-    session_tx:  mpsc::Sender<ApplicationMessage>
+    to_sh_tx:  mpsc::Sender<ApplicationMessage>
 }
 
 pub struct ApplicationMessage {
@@ -33,31 +38,101 @@ impl ApplicationMessage {
     pub fn get_message(&self) -> &String { &self.message }
 }
 
-pub trait SocketActorCallback {
-    fn on_message_rx(&mut self, message: String);
-    fn on_alarm_rx(&mut self, message: String);
-}
-
 // Try to avoid Socket Actor knowing anything about the message structure/protocol.
 // Hence decoder is passed in as a dyn
 impl SocketActor {
     pub fn new(socket:       TcpStream,
 
-               hb_channel:        mpsc::Sender<u64>,
-               msg_channel:       mpsc::Receiver<ApplicationMessage>,
-               reset_sender:      mpsc::Sender<ResetMessage>,
-               decoder:           Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>,
-               session_handler:   mpsc::Sender<ApplicationMessage>) -> Self {
+               hb_channel:     mpsc::Sender<u64>,
+               from_mh_rx:     mpsc::Receiver<ApplicationMessage>,
+               reset_sender:   mpsc::Sender<ResetMessage>,
+               decoder:        Arc<Mutex<dyn Decoder<Item = String, Error = std::io::Error> + Send + Sync>>,
+               to_sh_tx:       mpsc::Sender<ApplicationMessage>) -> Self {
         Self {
             socket,
             interval_tx: hb_channel,
-            writable_rx: msg_channel,
+            from_mh_rx,
             reset_tx:    reset_sender,
             decoder,
-            session_tx: session_handler
+            to_sh_tx
         }
     }
 
+    pub async fn run_with_try(&mut self) {
+
+        let mut sent = false;
+        fix_println!("Starting SocketActor");
+
+        let mut buf = BytesMut::with_capacity(1024 * 128);
+
+        let mut decoder = self.decoder.lock().await; // Lock the decoder for mutable access
+
+        fix_println!("Connection received from:{}", self.socket.peer_addr().unwrap());
+        let mut tried = 0;
+        loop {
+
+            let num_bytes = match self.socket.try_read_buf(&mut buf) {
+                Ok(num_bytes) => { if num_bytes == 0 { break; } else {num_bytes} },
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {0}
+                Err(e) => {
+                    eprintln!("failed to read from socket; err = {:?}", e);
+                    return;
+                }
+            };
+
+            if num_bytes > 0 {
+                //todo:call a onRead() callBack
+                let Some(x) = decoder.decode(&mut buf).unwrap() else { todo!() };
+                // a single callback for now but it could be a list of callbacks I guess.
+                // todo perhaps implement the timer reset as a callback rather than a channel ?
+                let am = ApplicationMessage::new(x);
+                fix_println!("MH->SK: waiting @ session send, pending={}", self.from_mh_rx.len());
+                let res = self.to_sh_tx.send(am).await;
+                fix_println!("MH->SK: session sent, pending={}", self.from_mh_rx.len());
+                match res {
+                    Ok(_) => {},
+                    Err(e) => {eprintln!("failed to send to Session Handler.{}",e);}
+                }
+            }
+
+            let result =  self.from_mh_rx.try_recv();
+            yield_now().await;
+            tried += 1;
+
+            match result {
+                //Err(TryRecvError::Empty) => { if tried % 200000 == 0 { fix_println!("MH->SK: tried {} times so far",tried);}; },
+                Err(TryRecvError::Empty) => { },
+                Err(TryRecvError::Disconnected) => fix_println!("MH_RX: something went wrong."),
+                Ok(writable) => {
+
+                    fix_println!("MH->SK: tried {} times before msg arrived",tried);
+                    tried = 0;
+                    fix_println!("MH->SK: msgs recved.{}", self.from_mh_rx.len());
+                    let msg = writable.message.as_bytes();
+
+                    //todo: need some buffer, store, queue to append the created messages to
+                    //      the try_write many write multiple messages or just a bit of one
+                    //      don't assume anything ...
+                    let num_bytes = match self.socket.try_write(msg) {
+                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { eprintln!("Wrote {} bytes: {}", num_bytes, String::from_utf8_lossy(msg) ); num_bytes}},
+                        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => { 0 },
+                        Err(e) => {
+                            eprintln!("failed to read from socket; err = {:?}", e);
+                            return;
+                        }
+                    };
+
+                    if num_bytes > 0 {
+
+                        //todo: this tells the Countdown Timer to reset itself as a message has been /is being written
+                        //      This is part of the FIX protocal and so should prob be moved up a layer.
+                        //      Need to make sure that all the messages are sequence properly.
+                        //self.reset_tx.try_send(ResetMessage::Reset).unwrap();
+                    }
+                }
+            };
+        }
+    }
     pub async fn run(&mut self) {
 
         let mut sent = false;
@@ -85,18 +160,22 @@ impl SocketActor {
                 let Some(x) = decoder.decode(&mut buf).unwrap() else { todo!() };
                 // a single callback for now but it could be a list of callbacks I guess.
                 // todo perhaps implement the timer reset as a callback rather than a channel ?
-                let res = self.session_tx.send(ApplicationMessage::new(x)).await;
+                let am = ApplicationMessage::new(x);
+                fix_println!("MH->SK: waiting @ session send, pending={}", self.from_mh_rx.len());
+                let res = self.to_sh_tx.send(am).await;
+                fix_println!("MH->SK: session sent, pending={}", self.from_mh_rx.len());
                 match res {
-                    Ok(_) => {eprintln!("Successfully sent to Session Handler.");},
+                    Ok(_) => {},
                     Err(e) => {eprintln!("failed to send to Session Handler.{}",e);}
                 }
             }
 
-            if self.writable_rx.len() > 0 {
-                eprintln!("MH->SK: msgs pending={}", self.writable_rx.len());
-            }
 
-            let result =  self.writable_rx.recv().await;
+            fix_println!("MH->SK: about to wait @ msg recv, pending={}", self.from_mh_rx.len());
+            //dbg!(&self.writable_rx);
+            let result =  self.from_mh_rx.recv().await;
+            fix_println!("MH->SK: msgs remaining  to recv.{}", self.from_mh_rx.len());
+
             match result {
                 Some(writable) => {
                     let msg = writable.message.as_bytes();
@@ -105,7 +184,7 @@ impl SocketActor {
                     //      the try_write many write multiple messages or just a bit of one
                     //      don't assume anything ...
                     let num_bytes = match self.socket.try_write(msg) {
-                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { eprintln!("Wrote {} bytes to socket", num_bytes ); num_bytes}},
+                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { eprintln!("Wrote {} bytes: {}", num_bytes, String::from_utf8_lossy(msg) ); num_bytes}},
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => { 0 },
                         Err(e) => {
                             eprintln!("failed to read from socket; err = {:?}", e);
@@ -118,7 +197,12 @@ impl SocketActor {
                         //todo: this tells the Countdown Timer to reset itself as a message has been /is being written
                         //      This is part of the FIX protocal and so should prob be moved up a layer.
                         //      Need to make sure that all the messages are sequence properly.
-                        //self.reset_tx.try_send(ResetMessage::Reset).unwrap();
+                        fix_println!("SK:resetting HB countdown");
+                        let result = self.reset_tx.try_send(ResetMessage::Reset);
+                        match result {
+                            Ok(_) => {},
+                            Err(e) => {eprintln!("failed to reset countdown; err = {:?}", e)}
+                        };
                     }
                 }
                 None => { println!("Couldn't get msg"); }

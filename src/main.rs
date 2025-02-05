@@ -14,6 +14,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::Decoder;
 use crate::fix_decoder::MyFIXDecoder;
@@ -47,6 +48,11 @@ async fn main() -> io::Result<()> {
     // Print out our settings (as a HashMap)
     let settings = settings.try_deserialize::<HashMap<String, String>>().unwrap();
 
+    let metrics = Handle::current().metrics();
+    let n = metrics.num_workers();
+    println!("Runtime is using {} workers", n);
+
+
     println!("\n{:?} \n\n-----------",settings);
 
     let port = settings.get("server_port").unwrap();
@@ -55,18 +61,16 @@ async fn main() -> io::Result<()> {
 
     let listener = TcpListener::bind(local_addr).await?;
 
-    let (interval_tx, interval_rx)     = mpsc::channel::<u64>(8);
-    let (alarm_tx, alarm_rx)           = mpsc::channel::<AlarmMessage>(8);
-    let (reset_tx, reset_rx)           = mpsc::channel::<ResetMessage>(8);
-    let (mh2sc_msg_tx, mh2sc_msg_rx)   = mpsc::channel::<ApplicationMessage>(8);
+    let (interval_tx, interval_rx)     = mpsc::channel::<u64>(1);
+    let (alarm_tx, alarm_rx)           = mpsc::channel::<AlarmMessage>(1);
+    let (reset_tx, reset_rx)           = mpsc::channel::<ResetMessage>(1);
+    let (mh2sc_msg_tx, mh2sc_msg_rx)   = mpsc::channel::<ApplicationMessage>(3);
 
     // For the session handler to msh handler msg passing.
-    let (sh2mh_tx, sh2mh_rx)   = mpsc::channel::<FixMessage>(8);
+    let (sh2mh_tx, sh2mh_rx)   = mpsc::channel::<FixMessage>(1);
 
     // For the socket handler to session handler msg passing.
-    let (sc2sh_tx, sc2sh_rx)   = mpsc::channel::<ApplicationMessage>(8);
-
-
+    let (sc2sh_tx, sc2sh_rx)   = mpsc::channel::<ApplicationMessage>(1);
 
     let hb_task = tokio::spawn(async move {
         let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
@@ -95,8 +99,12 @@ async fn main() -> io::Result<()> {
     let sa_task = tokio::spawn(async move {
         let mut sa = socket_actor::SocketActor::new(_socket, sa_interval_tx_clone, mh2sc_msg_rx, reset_tx, decoder_clone, sc2sh_tx);
         fix_println!("Starting SocketActor.");
-        sa.run().await;
+        sa.run_with_try().await;
     });
+
+    let metrics = Handle::current().metrics();
+    let n = metrics.num_alive_tasks();
+    println!("Runtime is using {} num_alive_tasks", n);
 
     let _ = tokio::join!(sa_task, hb_task, mh_task, sh_task);
 

@@ -1,10 +1,11 @@
 use crate::fix_println;
-use crate::socket_actor::{ApplicationMessage, SocketActorCallback};
+use crate::socket_actor::{ApplicationMessage};
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::task::yield_now;
 use crate::countdown_actor::{AlarmMessage, ResetMessage};
 use crate::fix_msg_handler::MyFixMsgHandler;
 
@@ -92,12 +93,12 @@ impl FixSessionHandler {
             let x = self.from_socket_rx.try_recv();
 
             let outstanding_from_socket = self.to_msg_hdlr_tx.max_capacity() - self.to_msg_hdlr_tx.capacity();
-            let outstanding_to_socket = self.from_socket_rx.len();
+            let outstanding_from_socket = self.from_socket_rx.len();
 
-            if outstanding_to_socket > 0 {
+            if outstanding_from_socket > 0 {
                 if flag == true {
                     flag = false;
-                    fix_println!("SK_TX: {} messages in outgoing Q. {} ",outstanding_to_socket, flag);
+                    fix_println!("SK_TX: {} messages in incoming Q from socket. {} ",outstanding_from_socket, flag);
 
                 }
             }
@@ -105,16 +106,18 @@ impl FixSessionHandler {
             if outstanding_from_socket > 0 {
                 if sflag == true {
                     sflag = false;
-                    fix_println!("MH_TX: {} messages in outgoing Q. {} ",outstanding_from_socket, flag);
+                    fix_println!("MH_TX: {} messages in outgoing Q to msg_handler. {} ",outstanding_from_socket, flag);
 
                 }
             }
 
             match x {
                 Ok(app_msg) => {
-                    fix_println!("Attempting to send msg");
+
                     let fix_msg = FixMessage::new(&app_msg.get_message());
+                    fix_println!("SH2MK: Attempting to send msg");
                     let x2 = self.to_msg_hdlr_tx.send(fix_msg).await;
+                    fix_println!("SH2MK: sent msg to MH.{}",self.to_msg_hdlr_tx.capacity());
                     match x2 {
                         Ok(_) => {}
                         Err(em) => { fix_println!("Session Handler: error sending to Msg Handler: {}", em) }
@@ -130,7 +133,7 @@ impl FixSessionHandler {
                     fix_println!("Attempting to send HB");
                     let hb = &String::from("35=1");
                     let fix_hb_msg = FixMessage::dummy(hb, '1');
-
+                    fix_println!("SH2MK: Attempting to hb msg");
                     let res = self.to_msg_hdlr_tx.send(fix_hb_msg).await;
 
                     match res {
@@ -141,6 +144,7 @@ impl FixSessionHandler {
                 Err(TryRecvError::Empty) => {},
                 Err(TryRecvError::Disconnected) => { },
             };
+            yield_now().await;
         }
     }
 
@@ -198,36 +202,4 @@ pub trait FixMsgHandler {
     fn on_cxl_replace_accepted(&mut self);
     fn on_cxl_replace_rejected(&mut self);
     fn on_execution_report(&mut self);
-}
-
-impl SocketActorCallback for FixSessionHandler {
-    fn on_message_rx(&mut self, message: String) {
-        // todo! : split message into hdr1, hdr2, body, trailer \
-        //         validate hdr2
-        //         pass body onto application_msg_handler
-        //         Session level messages: logon, heartbeat, testrequest should all be handled at this layer
-        //         NewOrderSingle etc should be handled further up.
-
-        let fix_msg = FixMessage::new(&message);
-
-        fix_println!("Handling: {}",message);
-
-        if fix_msg.msg_type == '0' {
-            fix_println!("Requesting: on_test_request");
-        } else if fix_msg.msg_type == 'A' {
-            fix_println!("Requesting: on_test_request");
-        } else if fix_msg.msg_type == '1' {
-            fix_println!("Requesting: on_test_request");
-        } else {
-            fix_println!("Unknown message type:{}",fix_msg.msg_type);
-        }
-
-        self.to_msg_hdlr_tx.send(fix_msg);
-    }
-
-    fn on_alarm_rx(&mut self, message: String) {
-        //todo!()
-        fix_println!("Requesting HB:{}",message);
-        self.to_msg_hdlr_tx.send(FixMessage::new(&message));
-    }
 }
