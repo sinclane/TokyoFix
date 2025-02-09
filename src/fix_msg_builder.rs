@@ -6,6 +6,59 @@ use crate::fix_42::value_types::FixTag;
 
 const FIX_FIELD_SEPARATOR: u8 = 0x01;
 
+struct SessionHeader {
+    header_one       : String,
+    header_one_len   : usize,
+    header_two       : String,
+    header_two_len   : usize,
+}
+
+impl SessionHeader {
+
+    fn new(fix_version: &str, sender_comp_id: &str, target_comp_id: &str) -> SessionHeader {
+
+        let mut new = SessionHeader {
+            header_one : String::new(),
+            header_one_len : 0,
+            header_two : String::new(),
+            header_two_len : 0
+        };
+
+        new.header_one.push_str(fix_version);
+        new.header_one.push_str("9=");
+        new.header_one_len = new.header_one.len();
+
+        new.header_two.push_str("49=");
+        new.header_two.push_str(sender_comp_id);
+        new.header_two.push_str("56=");
+        new.header_two.push_str(target_comp_id);
+        new.header_two_len = new.header_two.len();
+
+        new
+    }
+}
+
+
+fn new_create_fix_pre_body(buf :&mut String, header_two :&str, seq_no :&i32, msg_type :MsgType) {
+
+    //Pre-Body
+    buf.push_str("35=");
+    buf.push(msg_type.value());
+    buf.push_str(header_two);
+    buf.push_str("34=");
+    buf.push_str(seq_no.to_string().as_str());
+    buf.push_str("52=");
+    buf.push_str(chrono::offset::Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string().as_str());
+}
+
+fn new_create_fix_header(buf:&mut String, header_one: &String, pre_body:&str, seq_no:&i32, msg_type: MsgType) {
+
+    //Total length will be 13 + lengthOf(BodyLengthValue)
+    buf.push_str(header_one);
+    buf.push_str(pre_body.len().to_string().as_str());
+    buf.push('');
+    buf.push_str(pre_body);
+}
 fn create_fix_header(buf:&mut String, length:usize, seq_no:&i32, msg_type: fix_42::attribute_enums::MsgType) {
 
 
@@ -13,13 +66,13 @@ fn create_fix_header(buf:&mut String, length:usize, seq_no:&i32, msg_type: fix_4
     let mut tmp:String = String::from("");
 
     add_char_field(&mut tmp, tags::MSG_TYPE, msg_type.value());
-    add_seqnum_field(&mut tmp, tags::MSG_SEQ_NO,*seq_no);
     add_string_field(&mut tmp, tags::SENDER_COMP_ID, "TEST_SERVER");
     add_string_field(&mut tmp, tags::TARGET_COMP_ID, "TEST_CLIENT");
+    add_seqnum_field(&mut tmp, tags::MSG_SEQ_NO,*seq_no);
     add_timestamp_field(&mut tmp, tags::SENDING_TIME, chrono::offset::Utc::now());
 
     add_string_field(buf, tags::BEGIN_STRING, "FIX.4.2");
-    add_length_field(buf, tags::BODY_LENGTH, length + tmp.len());
+    add_unsigned_field(buf, tags::BODY_LENGTH, length + tmp.len());
 
     buf.push_str(&tmp);
 }
@@ -28,8 +81,23 @@ fn create_fix_trailer(buf:&mut String)  {
 
     add_checksum_field(buf, tags::CHECK_SUM, generate_check_sum(buf));
 }
+pub fn new_create_fix_heartbeat(buf:&mut String, hdr: &SessionHeader, seq_no:i32, test_request_id: &str){
 
-pub fn create_fix_heartbeat(buf:&mut String, seq_no:&i32, test_request_id: &str){
+    let mut pre_body:String = String::new();
+
+    new_create_fix_pre_body(&mut pre_body, &hdr.header_two, &seq_no, MsgType::HeartBeat );
+
+    if test_request_id.len() > 0 {
+        add_string_field(&mut pre_body, tags::TEST_REQ_ID, test_request_id);
+    }
+    // Then once complete calculate the overall length using the body length as input
+    // and prepend to the start of the msg.
+    new_create_fix_header(buf, &hdr.header_one, &pre_body, &seq_no, MsgType::HeartBeat);
+
+    // Finally calculate the checksum as append it the end
+    create_fix_trailer(buf);
+}
+pub fn create_fix_heartbeat(buf:&mut String, seq_no:i32, test_request_id: &str){
 
     let mut tmp:String = String::new();
 
@@ -38,39 +106,40 @@ pub fn create_fix_heartbeat(buf:&mut String, seq_no:&i32, test_request_id: &str)
     }
     // Then once complete calculate the overall length using the body length as input
     // and prepend to the start of the msg.
-    create_fix_header(buf, tmp.len(), seq_no, attribute_enums::MsgType::HeartBeat);
+    create_fix_header(buf, tmp.len(), &seq_no, attribute_enums::MsgType::HeartBeat);
 
     buf.push_str(&tmp);
     // Finally calculate the checksum as append it the end
     create_fix_trailer(buf);
 }
 
-fn create_fix_logon(buf:&mut String, seq_no:&i32, hb_interval: i32, encryption_method :attribute_enums::EncryptMethod, hb_internal: usize) {
+pub fn create_fix_logon(buf:&mut String, seq_no:i32, hb_interval: u64, encryption_method :attribute_enums::EncryptMethod) {
     let mut tmp: String = String::from("");
 
     add_char_field(&mut tmp, tags::ENCRYPT_METHOD, encryption_method.value());
-    add_int_field(&mut tmp, tags::HEARTBT_INT, hb_interval);
+    add_u64_field(&mut tmp, tags::HEARTBT_INT, hb_interval);
 
     // Then once complete calculate the overall length using the body length as input
     // and prepend to the start of the msg.
-    create_fix_header(buf, tmp.len(), seq_no, attribute_enums::MsgType::Logon);
+    create_fix_header(buf, tmp.len(), &seq_no, attribute_enums::MsgType::Logon);
 
     buf.push_str(&tmp);
     // Finally calculate the checksum as append it the end
     create_fix_trailer(buf);
 }
 
-fn create_fix_test_request(buf:&mut String, seq_no:&i32) {
+fn create_fix_test_request(buf:&mut String, seq_no:i32) {
 
     let mut tmp: String = String::from("");
     // Then once complete calculate the overall length using the body length as input
     // and prepend to the start of the msg.
-    create_fix_header(buf, tmp.len(), seq_no, attribute_enums::MsgType::TestRequest);
+    create_fix_header(buf, tmp.len(), &seq_no, attribute_enums::MsgType::TestRequest);
     add_string_field(&mut tmp, tags::TEST_REQ_ID, chrono::offset::Utc::now().format("%Y%m%d%H%M%S%3f").to_string().as_str());
     buf.push_str(&tmp);
     // Finally calculate the checksum as append it the end
     create_fix_trailer(buf);
 }
+
 
 fn add_checksum_field(buf:&mut String, tag :FixTag, cksum:usize){
     buf.push_str(tag.id());
@@ -120,7 +189,14 @@ fn add_price_field(buf:&mut String, tag :FixTag, value :f64) {
     buf.push('');
 }
 
-fn add_length_field(buf:&mut String, tag :FixTag, value :usize) {
+fn add_unsigned_field(buf:&mut String, tag :FixTag, value :usize) {
+    buf.push_str(tag.id());
+    buf.push('=');
+    buf.push_str(value.to_string().as_str());
+    buf.push('');
+}
+
+fn add_u64_field(buf:&mut String, tag :FixTag, value :u64) {
     buf.push_str(tag.id());
     buf.push('=');
     buf.push_str(value.to_string().as_str());
@@ -202,9 +278,45 @@ mod tests {
 
     #[test]
     fn test_create_fix_heartbeat() {
+
+        let hdr = SessionHeader::new("8=FIX.4.2","TEST_SERVER","TEST_CLIENT");
+
         let mut msg = String::from("");
         let s = chrono::offset::Utc::now();
         create_fix_heartbeat(&mut msg, 0, "test");
+        let e = chrono::offset::Utc::now();
+        println!("Duration:{}",e-s);
+        println!("{msg}");
+
+        let mut msg = String::from("");
+        let s = chrono::offset::Utc::now();
+        new_create_fix_heartbeat(&mut msg, &hdr, 0, "test");
+        let e = chrono::offset::Utc::now();
+        println!("Duration:{}",e-s);
+        println!("{msg}");
+
+        let mut msg = String::from("");
+        let s = chrono::offset::Utc::now();
+        create_fix_heartbeat(&mut msg, 0, "test");
+        let e = chrono::offset::Utc::now();
+        println!("Duration:{}",e-s);
+        println!("{msg}");
+
+        let mut msg = String::from("");
+        let s = chrono::offset::Utc::now();
+        new_create_fix_heartbeat(&mut msg, &hdr, 0, "test");
+        let e = chrono::offset::Utc::now();
+        println!("Duration:{}",e-s);
+        println!("{msg}");
+    }
+    #[test]
+    fn test_new_create_fix_heartbeat() {
+
+        let hdr = SessionHeader::new("8=FIX.4.2","TEST_SERVER","TEST_CLIENT");
+
+        let mut msg = String::from("");
+        let s = chrono::offset::Utc::now();
+        new_create_fix_heartbeat(&mut msg, &hdr,0, "test");
         let e = chrono::offset::Utc::now();
         println!("Duration:{}",e-s);
         println!("{msg}");
@@ -215,7 +327,7 @@ mod tests {
         let mut msg = String::from("");
 
         let s = chrono::offset::Utc::now();
-        create_fix_logon(&mut msg, 0, 10, attribute_enums::EncryptMethod::NONE,30);
+        create_fix_logon(&mut msg, 0, 10, attribute_enums::EncryptMethod::NONE);
         let e = chrono::offset::Utc::now();
         println!("Duration:{}",e-s);
         println!("{msg}");

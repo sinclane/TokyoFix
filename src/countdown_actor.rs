@@ -2,6 +2,7 @@
 use tokio::sync::{mpsc};
 use tokio::time;
 use std::io::Write;
+use tokio::task::yield_now;
 use crate::fix_println;
 
 pub struct CountdownActor {
@@ -55,6 +56,7 @@ impl CountdownActor {
                         interval.reset();
                     }
                 }
+                yield_now().await;
             }
         } else {
             eprintln!("CountdownActor: Failed to receive initial interval");

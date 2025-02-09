@@ -6,7 +6,7 @@ mod fix_msg_handler;
 mod fix_42;
 mod fix_msg_builder;
 
-use crate::fix_session_handler::{FixMessage, FixMsgHandler};
+use crate::fix_session_handler::FixMessage;
 use crate::countdown_actor::{AlarmMessage, ResetMessage};
 use config::{Config, File};
 use std::collections::HashMap;
@@ -55,10 +55,17 @@ async fn main() -> io::Result<()> {
 
     println!("\n{:?} \n\n-----------",settings);
 
+    /* Client
+    let port = settings.get("target_port").unwrap();
+    let host = settings.get("target_host").unwrap();
+    let target_destination = format!("{}:{}", host, port);
+    let mut socket = TcpStream::connect("localhost:8080").await?;
+     */
+
+    //As Server
     let port = settings.get("server_port").unwrap();
     let local_addr = format!("localhost:{}", port);
     fix_println!("Started server on: {}", local_addr);
-
     let listener = TcpListener::bind(local_addr).await?;
 
     let (interval_tx, interval_rx)     = mpsc::channel::<u64>(1);
@@ -92,12 +99,16 @@ async fn main() -> io::Result<()> {
         sh.run_with_try().await;
     });
 
-    let (_socket, _) = listener.accept().await?;
+    // Use the '?' as the top-level main returns a result - so it can deal
+    // with any bad result created here.
+    let (socket, _) = listener.accept().await?;
+    fix_println!("Connection received from:{}", socket.peer_addr()?);
+
     let decoder_impl = Arc::new(Mutex::new(MyFIXDecoder::new(&settings)));
     let decoder_clone = Arc::clone(&decoder_impl);
     let sa_interval_tx_clone = interval_tx.clone();
     let sa_task = tokio::spawn(async move {
-        let mut sa = socket_actor::SocketActor::new(_socket, sa_interval_tx_clone, mh2sc_msg_rx, reset_tx, decoder_clone, sc2sh_tx);
+        let mut sa = socket_actor::SocketActor::new(socket, sa_interval_tx_clone, mh2sc_msg_rx, reset_tx, decoder_clone, sc2sh_tx);
         fix_println!("Starting SocketActor.");
         sa.run_with_try().await;
     });

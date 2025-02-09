@@ -7,11 +7,8 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use std::io::{self,Write};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
+use tokio::sync::mpsc::error::{TryRecvError};
 use tokio::task::yield_now;
-use tokio::time::error::Elapsed;
-use tokio::time::timeout;
 use tokio_util::codec::{Decoder};
 use crate::countdown_actor::AlarmMessage;
 use crate::countdown_actor::ResetMessage;
@@ -29,12 +26,27 @@ pub struct SocketActor {
 }
 
 pub struct ApplicationMessage {
-    message: String
+    message: String,
+    bmsg: Vec<u8>
+}
+
+impl Clone for ApplicationMessage {
+    fn clone(&self) -> Self {
+        ApplicationMessage {
+            message : self.message.clone(),
+            bmsg : self.bmsg.clone()
+        }
+    }
 }
 
 impl ApplicationMessage {
 
-    pub fn new(message: String) -> ApplicationMessage { ApplicationMessage { message } }
+    pub fn new(message: String) -> ApplicationMessage {
+        ApplicationMessage {
+            message,
+            bmsg : Vec::new()
+        }
+    }
     pub fn get_message(&self) -> &String { &self.message }
 }
 
@@ -60,15 +72,10 @@ impl SocketActor {
 
     pub async fn run_with_try(&mut self) {
 
-        let mut sent = false;
-        fix_println!("Starting SocketActor");
-
+        fix_println!("Running SocketActor");
         let mut buf = BytesMut::with_capacity(1024 * 128);
-
         let mut decoder = self.decoder.lock().await; // Lock the decoder for mutable access
 
-        fix_println!("Connection received from:{}", self.socket.peer_addr().unwrap());
-        let mut tried = 0;
         loop {
 
             let num_bytes = match self.socket.try_read_buf(&mut buf) {
@@ -81,14 +88,9 @@ impl SocketActor {
             };
 
             if num_bytes > 0 {
-                //todo:call a onRead() callBack
                 let Some(x) = decoder.decode(&mut buf).unwrap() else { todo!() };
-                // a single callback for now but it could be a list of callbacks I guess.
-                // todo perhaps implement the timer reset as a callback rather than a channel ?
                 let am = ApplicationMessage::new(x);
-                fix_println!("MH->SK: waiting @ session send, pending={}", self.from_mh_rx.len());
                 let res = self.to_sh_tx.send(am).await;
-                fix_println!("MH->SK: session sent, pending={}", self.from_mh_rx.len());
                 match res {
                     Ok(_) => {},
                     Err(e) => {eprintln!("failed to send to Session Handler.{}",e);}
@@ -96,25 +98,19 @@ impl SocketActor {
             }
 
             let result =  self.from_mh_rx.try_recv();
-            yield_now().await;
-            tried += 1;
-
             match result {
                 //Err(TryRecvError::Empty) => { if tried % 200000 == 0 { fix_println!("MH->SK: tried {} times so far",tried);}; },
                 Err(TryRecvError::Empty) => { },
                 Err(TryRecvError::Disconnected) => fix_println!("MH_RX: something went wrong."),
                 Ok(writable) => {
 
-                    fix_println!("MH->SK: tried {} times before msg arrived",tried);
-                    tried = 0;
-                    fix_println!("MH->SK: msgs recved.{}", self.from_mh_rx.len());
                     let msg = writable.message.as_bytes();
 
                     //todo: need some buffer, store, queue to append the created messages to
                     //      the try_write many write multiple messages or just a bit of one
                     //      don't assume anything ...
                     let num_bytes = match self.socket.try_write(msg) {
-                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { eprintln!("Wrote {} bytes: {}", num_bytes, String::from_utf8_lossy(msg) ); num_bytes}},
+                        Ok(num_bytes) => { if num_bytes == 0 { break; } else { fix_println!("Wrote {} bytes: {}", num_bytes, String::from_utf8_lossy(msg) ); num_bytes}},
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => { 0 },
                         Err(e) => {
                             eprintln!("failed to read from socket; err = {:?}", e);
@@ -131,6 +127,7 @@ impl SocketActor {
                     }
                 }
             };
+            yield_now().await;
         }
     }
     pub async fn run(&mut self) {
