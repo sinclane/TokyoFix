@@ -5,8 +5,8 @@ mod fix_session_handler;
 mod fix_msg_handler;
 mod fix_42;
 mod fix_msg_builder;
+mod fix_message;
 
-use crate::fix_session_handler::FixMessage;
 use crate::countdown_actor::{AlarmMessage, ResetMessage};
 use config::{Config, File};
 use std::collections::HashMap;
@@ -72,12 +72,7 @@ async fn main() -> io::Result<()> {
     let (alarm_tx, alarm_rx)           = mpsc::channel::<AlarmMessage>(1);
     let (reset_tx, reset_rx)           = mpsc::channel::<ResetMessage>(1);
     let (mh2sc_msg_tx, mh2sc_msg_rx)   = mpsc::channel::<ApplicationMessage>(3);
-
-    // For the session handler to msh handler msg passing.
-    let (sh2mh_tx, sh2mh_rx)   = mpsc::channel::<FixMessage>(1);
-
-    // For the socket handler to session handler msg passing.
-    let (sc2sh_tx, sc2sh_rx)   = mpsc::channel::<ApplicationMessage>(1);
+    let (sc2mh_tx, sc2mh_rx)   = mpsc::channel::<ApplicationMessage>(1);
 
     let hb_task = tokio::spawn(async move {
         let mut hb = countdown_actor::CountdownActor::new(alarm_tx, interval_rx, reset_rx);
@@ -87,16 +82,9 @@ async fn main() -> io::Result<()> {
 
     let mh_interval_tx_clone = interval_tx.clone();
     let mh_task = tokio::spawn(async move {
-        let mut mh  =  MyFixMsgHandler::new(mh_interval_tx_clone, sh2mh_rx, mh2sc_msg_tx);
+        let mut mh  =  MyFixMsgHandler::new(mh_interval_tx_clone, sc2mh_rx, mh2sc_msg_tx, alarm_rx);
         fix_println!("Starting MyFixMsgHandler.");
         mh.run_with_try().await;
-    });
-
-    let sh_task = tokio::spawn(async move {
-        let mut sh =  FixSessionHandler::new(sc2sh_rx, sh2mh_tx, alarm_rx);
-        fix_println!("Starting FixSessionHandler.");
-        //sh.run().await;
-        sh.run_with_try().await;
     });
 
     // Use the '?' as the top-level main returns a result - so it can deal
@@ -108,7 +96,7 @@ async fn main() -> io::Result<()> {
     let decoder_clone = Arc::clone(&decoder_impl);
     let sa_interval_tx_clone = interval_tx.clone();
     let sa_task = tokio::spawn(async move {
-        let mut sa = socket_actor::SocketActor::new(socket, sa_interval_tx_clone, mh2sc_msg_rx, reset_tx, decoder_clone, sc2sh_tx);
+        let mut sa = socket_actor::SocketActor::new(socket, sa_interval_tx_clone, mh2sc_msg_rx, reset_tx, decoder_clone, sc2mh_tx);
         fix_println!("Starting SocketActor.");
         sa.run_with_try().await;
     });
@@ -117,7 +105,7 @@ async fn main() -> io::Result<()> {
     let n = metrics.num_alive_tasks();
     println!("Runtime is using {} num_alive_tasks", n);
 
-    let _ = tokio::join!(sa_task, hb_task, mh_task, sh_task);
+    let _ = tokio::join!(sa_task, hb_task, mh_task);
 
     Ok(())
 }

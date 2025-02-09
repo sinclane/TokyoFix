@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::{fix_msg_builder, fix_println};
-use crate::fix_session_handler::FixMessage;
+use crate::fix_message::FixMessage;
 use std::io::Write;
 use std::iter::Skip;
 use std::slice::Iter;
@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::yield_now;
-use crate::countdown_actor::ResetMessage;
+use crate::countdown_actor::{AlarmMessage, ResetMessage};
 use crate::fix_42::attribute_enums::{EncryptMethod, FixEnum, MsgType};
 use crate::fix_42::{attribute_enums, tags};
 use crate::socket_actor::ApplicationMessage;
@@ -51,8 +51,9 @@ impl FixMsgStore {
 pub struct MyFixMsgHandler {
 
     interval_tx : Sender<u64>,
-    fix_msg_rx  : Receiver<FixMessage>,
+    app_msg_rx  : Receiver<ApplicationMessage>,
     app_msg_tx  : Sender<ApplicationMessage>,
+    alarm_rx    : Receiver<AlarmMessage>,
     fix_status  : FixStatus,
     msg_store   : FixMsgStore
 }
@@ -77,47 +78,64 @@ impl FixStatus {
 
 impl MyFixMsgHandler {
 
-    pub fn new(interval_sender : Sender<u64>, sess_hdl_recvr : Receiver<FixMessage>, app_msg_sender : Sender<ApplicationMessage>) -> Self {
+    pub fn new(interval_sender : Sender<u64>, app_msg_rx: Receiver<ApplicationMessage>, app_msg_sender : Sender<ApplicationMessage>, alarm_rx :Receiver<AlarmMessage> ) -> Self {
         Self {
-            interval_tx : interval_sender,
-            fix_msg_rx  : sess_hdl_recvr,
-            app_msg_tx  : app_msg_sender,
-            fix_status  : FixStatus::new(),
-            msg_store   : FixMsgStore::new()
+            interval_tx: interval_sender,
+            app_msg_rx,
+            app_msg_tx: app_msg_sender,
+            fix_status: FixStatus::new(),
+            msg_store: FixMsgStore::new(),
+            alarm_rx
         }
     }
 
-    pub async fn run_with_try(mut self) {
+    async fn handle_fix_message(&mut self, msg: &FixMessage) {
+
+        if msg.get_msg_type() == MsgType::Logon.value() {
+            fix_println!("Calling: on_logon");
+            self.on_logon_request(msg.get_body()).await;
+        } else if msg.get_msg_type() == MsgType::TestRequest.value() {
+            fix_println!("Calling: on_test_request");
+            self.on_test_request(msg.get_body()).await;
+
+        } else if msg.get_msg_type() == MsgType::HeartBeat.value() {
+            fix_println!("Calling: on_heartbeat");
+            self.on_heartbeat(msg.get_body());
+
+        } else if msg.get_msg_type() == MsgType::SequenceReset.value() {
+            fix_println!("Resetting Sequence Numbers.");
+
+        } else {
+            fix_println!("Unknown message type:'{}'",msg.get_msg_type());
+        }
+    }
+
+    pub async fn run_with_try(&mut self) {
 
         fix_println!("Start Msg handler loop.");
 
         loop {
 
-            let recvd = self.fix_msg_rx.try_recv();
+            let recvd = self.app_msg_rx.try_recv();
+
             match recvd {
                 Err(TryRecvError::Empty) => {},
                 Err(TryRecvError::Disconnected) => fix_println!("MH_RX: something went wrong."),
-                Ok(msg) => {
-                    if msg.get_msg_type() == MsgType::Logon.value() {
-                        fix_println!("Calling: on_logon");
-                        self.on_logon_request(msg.get_body()).await;
-
-                    } else if msg.get_msg_type() == MsgType::TestRequest.value() {
-                        fix_println!("Calling: on_test_request");
-                        self.on_test_request(msg.get_body()).await;
-
-                    } else if msg.get_msg_type() == MsgType::HeartBeat.value() {
-                        fix_println!("Calling: on_heartbeat");
-                        self.on_heartbeat(msg.get_body());
-
-                    } else if msg.get_msg_type() == MsgType::SequenceReset.value() {
-                        fix_println!("Resetting Sequence Numbers.");
-
-                    } else {
-                        fix_println!("Unknown message type:'{}'",msg.get_msg_type());
-                    }
+                Ok(app_msg) => {
+                    let fix_msg = FixMessage::new(&app_msg.get_message());
+                    self.handle_fix_message(&fix_msg).await;
                 }
             };
+
+            let x = self.alarm_rx.try_recv();
+            match x {
+                Ok(_) => {
+                    self.create_and_send_heartbeat("").await;
+                }
+                Err(TryRecvError::Empty) => {},
+                Err(TryRecvError::Disconnected) => { },
+            };
+
             yield_now().await;
         }
     }

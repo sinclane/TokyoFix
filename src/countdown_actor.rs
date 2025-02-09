@@ -39,7 +39,6 @@ impl CountdownActor {
                 tokio::select! {
                     _ = interval.tick() => {
                         // Send heartbeat message to Actor 1
-                        fix_println!("Sending Alarm!");
                         if self.alarm_tx
                             .send(AlarmMessage::Alarm)
                             .await
