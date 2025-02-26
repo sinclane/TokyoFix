@@ -62,7 +62,24 @@ struct FixStatus {
     logon_complete : bool,
     next_seq_id_to_send : i32,
     next_seq_id_ro_recv : i32,
-    hb_interval : u64
+    hb_interval : u64,
+    status : FixSessionStatus
+}
+
+enum FixServerStatus {
+    AWAITING_LOGON,
+    LOGON_RECEIVED,
+}
+
+enum FixClientStatus {
+    UNSENT,
+    LOGON_SENT,
+}
+
+#[derive(PartialEq, Eq)]
+enum FixSessionStatus {
+    DOWN,
+    UP,
 }
 
 impl FixStatus {
@@ -71,7 +88,8 @@ impl FixStatus {
             logon_complete      :  false,
             next_seq_id_to_send : 0,
             next_seq_id_ro_recv : 0,
-            hb_interval         : 15000
+            hb_interval         : 10,
+            status              : FixSessionStatus::DOWN
         }
     }
 }
@@ -122,6 +140,7 @@ impl MyFixMsgHandler {
                 Err(TryRecvError::Empty) => {},
                 Err(TryRecvError::Disconnected) => fix_println!("MH_RX: something went wrong."),
                 Ok(app_msg) => {
+                    fix_println!("Received from Socket: {}", app_msg.get_message());
                     let fix_msg = FixMessage::new(&app_msg.get_message());
                     self.handle_fix_message(&fix_msg).await;
                 }
@@ -173,7 +192,7 @@ impl MyFixMsgHandler {
         self.send(msg).await;
     }
 
-    async fn create_and_send_logon(&mut self) {
+    pub async fn create_and_send_logon(&mut self) {
 
         let mut logon = String::new();
 
@@ -183,6 +202,8 @@ impl MyFixMsgHandler {
 
         let msg = ApplicationMessage::new(logon);
         let res = self.app_msg_tx.send(msg).await;
+
+        self.fix_status.status = FixSessionStatus::UP;
 
         match res {
             Ok(_) => {},
@@ -222,7 +243,7 @@ impl MyFixMsgHandler {
     }
 
     async fn on_logon_request(&mut self, message: String) {
-        //todo!()
+
         fix_println!("Received a logon Request");
 
         let mut hmap = HashMap::new();
@@ -237,14 +258,15 @@ impl MyFixMsgHandler {
         fix_println!("Initiating HB.");
 
         // TODO: There has to be a nicer way of doing this - don't want to have to clone it each time I call it
-        // Perhaps: x.blocking_send(heartbeat_interval * 1000).expect("TODO: panic message");
         let x = self.interval_tx.clone();
 
         tokio::spawn( async move { x.send(heartbeat_interval * 1000).await.expect("TODO: panic message")});
 
         //This is the initial response to the logon request
         //
-        self.create_and_send_logon().await;
+        if( self.fix_status.status == FixSessionStatus::DOWN ) {
+            self.create_and_send_logon().await;
+        }
     }
 }
 pub fn parse_fix_message(buf:&str, hmap:&mut HashMap<String, String>)  {

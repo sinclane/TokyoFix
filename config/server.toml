@@ -8,14 +8,8 @@ type = "server"
 #[fix_server]
 server_port = 8080
 
-#[fix_client]
-target_port = 8080
-target_host = "localhost"
-
 #[fix_session]
 target_comp_id     = "CLIENT"
 sender_comp_id     = "SERVER"
 version            = "4.2"
 heartbeat_interval = 30
-
-

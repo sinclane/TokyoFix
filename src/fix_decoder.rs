@@ -94,6 +94,7 @@ impl Decoder for MyFIXDecoder {
                         // todo: fix this, its not right.
                         let frame = msg.to_owned().to_vec();
                         //src.advance(msg_end);
+
                         //src.split_to(msg_end);
                         //return the frame to the caller.
                         return Ok(Some(String::from_utf8_lossy(msg).to_string()));

@@ -88,8 +88,12 @@ impl SocketActor {
             };
 
             if num_bytes > 0 {
+                let z = buf.clone();
                 let Some(x) = decoder.decode(&mut buf).unwrap() else { todo!() };
+                let y = x.clone();
                 let am = ApplicationMessage::new(x);
+                fix_println!("Read {} bytes from socket:{}",num_bytes,String::from_utf8_lossy(z.as_ref()));
+                fix_println!("Read from socket2:{}",y);
                 let res = self.to_sh_tx.send(am).await;
                 match res {
                     Ok(_) => {},

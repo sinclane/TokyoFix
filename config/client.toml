@@ -3,19 +3,14 @@
 # todo: but be able to define the structs within the relevant modules
 
 #[fix_service]
-type = "server"
-
-#[fix_server]
-server_port = 8080
+type = "client"
 
 #[fix_client]
 target_port = 8080
 target_host = "localhost"
 
 #[fix_session]
-target_comp_id     = "CLIENT"
-sender_comp_id     = "SERVER"
+target_comp_id     = "SERVER"
+sender_comp_id     = "CLIENT"
 version            = "4.2"
 heartbeat_interval = 30
-
-
