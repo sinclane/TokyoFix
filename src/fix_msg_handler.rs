@@ -140,7 +140,7 @@ impl MyFixMsgHandler {
                 Err(TryRecvError::Empty) => {},
                 Err(TryRecvError::Disconnected) => fix_println!("MH_RX: something went wrong."),
                 Ok(app_msg) => {
-                    fix_println!("Received from Socket: {}", app_msg.get_message());
+                    //fix_println!("Received from Socket: {}", app_msg.get_message());
                     let fix_msg = FixMessage::new(&app_msg.get_message());
                     self.handle_fix_message(&fix_msg).await;
                 }

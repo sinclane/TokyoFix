@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Error;
 use std::io::ErrorKind::InvalidData;
-use bytes::{BytesMut};
+use bytes::{Buf, BytesMut};
 use tokio_util::codec::{Decoder};
 
 
@@ -91,13 +91,11 @@ impl Decoder for MyFIXDecoder {
                         let cksum = (n1 * 100) + (n2 * 10) + n3;
 
                         // copy the data out of the buffer and into the heap
-                        // todo: fix this, its not right.
-                        let frame = msg.to_owned().to_vec();
-                        //src.advance(msg_end);
 
-                        //src.split_to(msg_end);
                         //return the frame to the caller.
-                        return Ok(Some(String::from_utf8_lossy(msg).to_string()));
+                        let ret = String::from_utf8_lossy(msg).to_string();
+                        let _ = src.split_to(msg_end);
+                        return Ok(Some(ret));
 
                     } else {
                         return Err(Error::new(InvalidData, "Likely incorrect tag9 value"))
